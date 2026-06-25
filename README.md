@@ -1,8 +1,8 @@
-# 🎵 YAC — YouTube Audio Client
+# 🎵 YTPlayer
 
 Минималистичный YouTube аудио плеер для Windows. Играет звук с YouTube без браузера — меньше RAM, никакой рекламы.
 
-![YAC Screenshot](screenshot.png)
+![YTPlayer Screenshot](screenshot.png)
 
 ## ✨ Возможности
 
@@ -18,7 +18,7 @@
 
 ## 📦 Зависимости
 
-Перед запуском положи рядом с `YAC.exe`:
+Перед запуском положи рядом с `YTPlayer.exe`:
 
 | Файл | Где скачать |
 |------|-------------|
@@ -31,8 +31,8 @@
 
 1. Скачай последний релиз из [Releases](../../releases)
 2. Распакуй архив
-3. Положи `mpv.exe`, `mpv.com`, `yt-dlp.exe` в папку с `YAC.exe`
-4. Запусти `YAC.exe`
+3. Положи `mpv.exe`, `mpv.com`, `yt-dlp.exe` в папку с `YTPlayer.exe`
+4. Запусти `YTPlayer.exe`
 
 ## 🎮 Управление
 
@@ -51,8 +51,8 @@
 Требования: .NET 8 SDK, Visual Studio 2022
 
 ```
-git clone https://github.com/ВАШ_НИК/YAC.git
-cd YAC/YAC
+git clone https://github.com/ВАШ_НИК/YTPlayer.git
+cd YTPlayer/YTPlayer
 dotnet build
 ```
 
