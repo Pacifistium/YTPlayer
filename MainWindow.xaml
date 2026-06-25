@@ -222,6 +222,7 @@
                         VerticalAlignment="Center" IsEnabled="False"
                         ValueChanged="ProgressSlider_ValueChanged"
                         PreviewMouseDown="ProgressSlider_MouseDown"
+                        PreviewMouseMove="ProgressSlider_MouseMove"
                         PreviewMouseUp="ProgressSlider_MouseUp"/>
                 <TextBlock x:Name="TimeDur" Grid.Column="2" Text="0:00" FontSize="9" Foreground="#555555" VerticalAlignment="Center" Margin="8,0,0,0"/>
             </Grid>
@@ -250,7 +251,10 @@
                         Minimum="0" Maximum="130" Value="80"
                         VerticalAlignment="Center"
                         ValueChanged="VolumeSlider_ValueChanged"
-                        MouseWheel="VolumeSlider_MouseWheel"/>
+                        MouseWheel="VolumeSlider_MouseWheel"
+                        PreviewMouseDown="VolumeSlider_MouseDown"
+                        PreviewMouseMove="VolumeSlider_MouseMove"
+                        PreviewMouseUp="VolumeSlider_MouseUp"/>
                 <TextBlock x:Name="VolumeText" Grid.Column="2" Text="80%" FontSize="9" Foreground="#555555" VerticalAlignment="Center" Margin="8,0,0,0" Width="32"/>
             </Grid>
 
@@ -315,7 +319,28 @@
             <!-- Очередь -->
             <TextBlock Grid.Row="3" Text="ОЧЕРЕДЬ" FontSize="9" Foreground="#555555" FontWeight="Bold" Margin="0,0,0,5"/>
             <ListBox x:Name="QueueList" Grid.Row="4"
-                     MouseDoubleClick="QueueList_MouseDoubleClick"/>
+                     MouseDoubleClick="QueueList_MouseDoubleClick">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Padding" Value="8,5"/>
+                        <Setter Property="Cursor" Value="Hand"/>
+                        <Setter Property="Foreground" Value="#cccccc"/>
+                        <Style.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter Property="Background" Value="#cc2222"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#222222"/>
+                            </Trigger>
+                            <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                <Setter Property="Foreground" Value="#44ee44"/>
+                                <Setter Property="FontWeight" Value="Bold"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ListBox.ItemContainerStyle>
+            </ListBox>
 
             <StackPanel Grid.Row="5" Orientation="Horizontal" Margin="0,4,0,0">
                 <Button Content="✕ Удалить" Style="{StaticResource SmallBtn}" Margin="0,0,4,0" Click="QueueRemove_Click"/>

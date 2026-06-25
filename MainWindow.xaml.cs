@@ -141,6 +141,59 @@ namespace YTPlayer
             LoadSettings();
         }
 
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
+            // Перехватываем медиакнопки клавиатуры
+            var source = System.Windows.Interop.HwndSource.FromHwnd(
+                new System.Windows.Interop.WindowInteropHelper(this).Handle);
+            source?.AddHook(MediaKeyHook);
+        }
+
+        private IntPtr MediaKeyHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            const int WM_APPCOMMAND = 0x0319;
+            if (msg == WM_APPCOMMAND)
+            {
+                var command = (lParam.ToInt32() >> 16) & 0xFFF;
+                switch (command)
+                {
+                    case 14: // APPCOMMAND_MEDIA_PLAY_PAUSE
+                        Dispatcher.Invoke(() => PauseButton_Click(this, null!));
+                        handled = true;
+                        break;
+                    case 13: // APPCOMMAND_MEDIA_STOP
+                        Dispatcher.Invoke(() => StopButton_Click(this, null!));
+                        handled = true;
+                        break;
+                    case 11: // APPCOMMAND_MEDIA_NEXTTRACK
+                        Dispatcher.Invoke(() =>
+                        {
+                            if (_queueIndex + 1 < _queue.Count)
+                            {
+                                _queueIndex++;
+                                _ = PlayQueueItemAsync(_queueIndex);
+                            }
+                        });
+                        handled = true;
+                        break;
+                    case 12: // APPCOMMAND_MEDIA_PREVIOUSTRACK
+                        Dispatcher.Invoke(() =>
+                        {
+                            if (_queueIndex - 1 >= 0)
+                            {
+                                _queueIndex--;
+                                _ = PlayQueueItemAsync(_queueIndex);
+                            }
+                            else _ = _mpv.SeekAbsoluteAsync(0);
+                        });
+                        handled = true;
+                        break;
+                }
+            }
+            return IntPtr.Zero;
+        }
+
         // ─── Трей ──────────────────────────────────────────────────────────
         private void InitTray()
         {
@@ -409,6 +462,12 @@ namespace YTPlayer
             UpdateTrayControls(_mpv.IsRunning);
         }
 
+        private void UpdateActiveTrack()
+        {
+            for (int i = 0; i < _queue.Count; i++)
+                _queue[i].IsActive = i == _queueIndex;
+        }
+
         private void AddCurrentToQueue_Click(object sender, RoutedEventArgs e)
         {
             var url = UrlBox.Text.Trim();
@@ -507,6 +566,7 @@ namespace YTPlayer
                 Log("PlayAsync returned");
                 SetStatus("играет", "#44cc77");
                 UpdateTrayControls(true);
+                UpdateActiveTrack();
             }
             finally
             {
@@ -640,8 +700,8 @@ namespace YTPlayer
             var track = ((Slider)sender).Template.FindName("PART_Track", (Slider)sender) as Track;
             if (track == null) return;
             var pos = track.ValueFromPoint(e.GetPosition(track));
-            ProgressSlider.Value = pos;
-            if (_mpv.IsRunning) _ = _mpv.SeekAbsoluteAsync(pos);
+            ProgressSlider.Value = Math.Clamp(pos, 0, ProgressSlider.Maximum);
+            // НЕ перематываем здесь — только при отпускании
         }
 
         private void ProgressSlider_MouseUp(object sender, MouseButtonEventArgs e)
@@ -650,9 +710,43 @@ namespace YTPlayer
             _isDraggingSlider = false;
         }
 
+        private void ProgressSlider_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+        {
+            if (!_isDraggingSlider || e.LeftButton != System.Windows.Input.MouseButtonState.Pressed) return;
+            var track = ((Slider)sender).Template.FindName("PART_Track", (Slider)sender) as Track;
+            if (track == null) return;
+            var pos = track.ValueFromPoint(e.GetPosition(track));
+            ProgressSlider.Value = Math.Clamp(pos, 0, ProgressSlider.Maximum);
+        }
+
         private void ProgressSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             if (_isDraggingSlider) TimePos.Text = FormatTime(e.NewValue);
+        }
+
+        private bool _isDraggingVolume;
+
+        private void VolumeSlider_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            _isDraggingVolume = true;
+            var track = ((Slider)sender).Template.FindName("PART_Track", (Slider)sender) as Track;
+            if (track == null) return;
+            var pos = track.ValueFromPoint(e.GetPosition(track));
+            VolumeSlider.Value = Math.Clamp(pos, VolumeSlider.Minimum, VolumeSlider.Maximum);
+        }
+
+        private void VolumeSlider_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+        {
+            if (!_isDraggingVolume || e.LeftButton != System.Windows.Input.MouseButtonState.Pressed) return;
+            var track = ((Slider)sender).Template.FindName("PART_Track", (Slider)sender) as Track;
+            if (track == null) return;
+            var pos = track.ValueFromPoint(e.GetPosition(track));
+            VolumeSlider.Value = Math.Clamp(pos, VolumeSlider.Minimum, VolumeSlider.Maximum);
+        }
+
+        private void VolumeSlider_MouseUp(object sender, MouseButtonEventArgs e)
+        {
+            _isDraggingVolume = false;
         }
 
         // ─── Громкость ─────────────────────────────────────────────────────
@@ -674,7 +768,7 @@ namespace YTPlayer
         {
             StatusText.Text = text;
             StatusDot.Fill = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(colorHex));
-        }
+         }
 
         private static string FormatTime(double seconds)
         {
@@ -696,6 +790,7 @@ namespace YTPlayer
     {
         public string Url { get; set; } = "";
         public string Title { get; set; } = "";
-        public override string ToString() => Title;
+        public bool IsActive { get; set; } = false;
+        public override string ToString() => (IsActive ? "▶ " : "") + Title;
     }
 }
