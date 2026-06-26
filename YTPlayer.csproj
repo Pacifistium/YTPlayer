@@ -11,6 +11,7 @@
     <ApplicationIcon>ytplayer.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App"/>
     <Content Include="ytplayer.ico">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

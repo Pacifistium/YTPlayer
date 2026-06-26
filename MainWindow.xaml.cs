@@ -1,8 +1,10 @@
 using System;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Drawing;
 using System.IO;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,6 +13,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Forms;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
@@ -43,6 +46,15 @@ namespace YTPlayer
         // ─── Настройки ─────────────────────────────────────────────────────
         private readonly string _settingsPath;
         private bool _isLoggingEnabled = true;
+
+        // ─── WM_APPCOMMAND (мультимедиа кнопки) ───────────────────────────
+        private const int WM_APPCOMMAND = 0x0319;
+        private const int APPCOMMAND_MEDIA_PLAY_PAUSE = 14;
+        private const int APPCOMMAND_MEDIA_NEXTTRACK   = 11;
+        private const int APPCOMMAND_MEDIA_PREVIOUSTRACK = 12;
+        private const int APPCOMMAND_MEDIA_STOP        = 13;
+        private const int APPCOMMAND_VOLUME_UP         = 10;
+        private const int APPCOMMAND_VOLUME_DOWN       = 9;
 
         public MainWindow()
         {
@@ -90,7 +102,8 @@ namespace YTPlayer
                 TimePos.Text = FormatTime(pos);
             });
 
-            _mpv.PlaybackEnded += () => Dispatcher.Invoke(() =>
+            // Используем BeginInvoke (не Invoke!) чтобы не блокировать mpv-поток
+            _mpv.PlaybackEnded += () => Dispatcher.BeginInvoke(new Action(async () =>
             {
                 Log("PlaybackEnded event fired");
                 _isStarting = false;
@@ -99,32 +112,27 @@ namespace YTPlayer
 
                 if (_loopEnabled)
                 {
-                    Dispatcher.BeginInvoke(new Action(async () =>
-                    {
-                        await Task.Delay(200);
-                        await PlayQueueItemAsync(_queueIndex);
-                    }));
+                    await Task.Delay(200);
+                    await PlayQueueItemAsync(_queueIndex);
                     return;
                 }
 
                 if (_queueIndex + 1 < _queue.Count)
                 {
                     _queueIndex++;
-                    Dispatcher.BeginInvoke(new Action(async () =>
-                    {
-                        await Task.Delay(300);
-                        await PlayQueueItemAsync(_queueIndex);
-                    }));
+                    await Task.Delay(300);
+                    await PlayQueueItemAsync(_queueIndex);
                 }
                 else
                 {
+                    SetActiveQueueItem(-1);
                     SetStatus("завершено", "#555555");
                     TitleText.Text = "Воспроизведение завершено";
                     PauseButton.Content = "⏸  Пауза";
                     ClearThumbnail();
                     if (_trayTitle != null) _trayTitle.Text = "Ничего не играет";
                 }
-            });
+            }));
 
             _mpv.ErrorOutput += msg => Dispatcher.Invoke(() => Log($"[mpv] {msg}"));
 
@@ -138,60 +146,86 @@ namespace YTPlayer
                 HideToTray();
             };
 
+            // Подключаем WinProc для мультимедиа кнопок после загрузки окна
+            Loaded += (s, e) =>
+            {
+                var hwndSource = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+                hwndSource?.AddHook(WndProc);
+            };
+
             LoadSettings();
         }
 
-        protected override void OnSourceInitialized(EventArgs e)
+        // ─── Мультимедиа кнопки (WM_APPCOMMAND) ───────────────────────────
+        private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
-            base.OnSourceInitialized(e);
-            // Перехватываем медиакнопки клавиатуры
-            var source = System.Windows.Interop.HwndSource.FromHwnd(
-                new System.Windows.Interop.WindowInteropHelper(this).Handle);
-            source?.AddHook(MediaKeyHook);
-        }
-
-        private IntPtr MediaKeyHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
-        {
-            const int WM_APPCOMMAND = 0x0319;
             if (msg == WM_APPCOMMAND)
             {
-                var command = (lParam.ToInt32() >> 16) & 0xFFF;
-                switch (command)
+                var cmd = (lParam.ToInt32() >> 16) & 0xFFF;
+                switch (cmd)
                 {
-                    case 14: // APPCOMMAND_MEDIA_PLAY_PAUSE
-                        Dispatcher.Invoke(() => PauseButton_Click(this, null!));
+                    case APPCOMMAND_MEDIA_PLAY_PAUSE:
+                        PauseButton_Click(this, null!);
                         handled = true;
                         break;
-                    case 13: // APPCOMMAND_MEDIA_STOP
-                        Dispatcher.Invoke(() => StopButton_Click(this, null!));
+                    case APPCOMMAND_MEDIA_NEXTTRACK:
+                        PlayNext();
                         handled = true;
                         break;
-                    case 11: // APPCOMMAND_MEDIA_NEXTTRACK
-                        Dispatcher.Invoke(() =>
-                        {
-                            if (_queueIndex + 1 < _queue.Count)
-                            {
-                                _queueIndex++;
-                                _ = PlayQueueItemAsync(_queueIndex);
-                            }
-                        });
+                    case APPCOMMAND_MEDIA_PREVIOUSTRACK:
+                        PlayPrev();
                         handled = true;
                         break;
-                    case 12: // APPCOMMAND_MEDIA_PREVIOUSTRACK
-                        Dispatcher.Invoke(() =>
-                        {
-                            if (_queueIndex - 1 >= 0)
-                            {
-                                _queueIndex--;
-                                _ = PlayQueueItemAsync(_queueIndex);
-                            }
-                            else _ = _mpv.SeekAbsoluteAsync(0);
-                        });
+                    case APPCOMMAND_MEDIA_STOP:
+                        StopButton_Click(this, null!);
+                        handled = true;
+                        break;
+                    case APPCOMMAND_VOLUME_UP:
+                        VolumeSlider.Value = Math.Min(VolumeSlider.Value + 5, VolumeSlider.Maximum);
+                        handled = true;
+                        break;
+                    case APPCOMMAND_VOLUME_DOWN:
+                        VolumeSlider.Value = Math.Max(VolumeSlider.Value - 5, VolumeSlider.Minimum);
                         handled = true;
                         break;
                 }
             }
             return IntPtr.Zero;
+        }
+
+
+        // ─── Следующий / Предыдущий трек ──────────────────────────────────
+        private void BtnNext_Click(object sender, RoutedEventArgs e) => PlayNext();
+        private void BtnPrev_Click(object sender, RoutedEventArgs e) => PlayPrev();
+
+        private void PlayNext()
+        {
+            if (_queueIndex + 1 < _queue.Count)
+            {
+                _queueIndex++;
+                _ = PlayQueueItemAsync(_queueIndex);
+            }
+        }
+
+        private void PlayPrev()
+        {
+            if (_queueIndex - 1 >= 0)
+            {
+                _queueIndex--;
+                _ = PlayQueueItemAsync(_queueIndex);
+            }
+            else if (_mpv.IsRunning)
+            {
+                // Если первый трек — перемотать в начало
+                _ = _mpv.SeekAbsoluteAsync(0);
+            }
+        }
+
+        // ─── Выделение активного трека ─────────────────────────────────────
+        private void SetActiveQueueItem(int idx)
+        {
+            for (int i = 0; i < _queue.Count; i++)
+                _queue[i].IsActive = (i == idx);
         }
 
         // ─── Трей ──────────────────────────────────────────────────────────
@@ -211,7 +245,7 @@ namespace YTPlayer
 
             _trayTitle = new ToolStripMenuItem("Ничего не играет") { Enabled = false };
             _trayPause = new ToolStripMenuItem("⏸  Пауза", null, TrayPause_Click);
-            _trayNext = new ToolStripMenuItem("⏭  Следующий", null, TrayNext_Click);
+            _trayNext  = new ToolStripMenuItem("⏭  Следующий", null, TrayNext_Click);
 
             var menu = new ContextMenuStrip();
             menu.Items.Add(_trayTitle);
@@ -253,14 +287,7 @@ namespace YTPlayer
         private void TrayOpen_Click(object? s, EventArgs e) => Dispatcher.Invoke(ShowFromTray);
         private void TrayStop_Click(object? s, EventArgs e) => Dispatcher.Invoke(() => StopButton_Click(this, null!));
         private void TrayPause_Click(object? s, EventArgs e) => Dispatcher.Invoke(() => PauseButton_Click(this, null!));
-        private void TrayNext_Click(object? s, EventArgs e) => Dispatcher.Invoke(() =>
-        {
-            if (_queueIndex + 1 < _queue.Count)
-            {
-                _queueIndex++;
-                _ = PlayQueueItemAsync(_queueIndex);
-            }
-        });
+        private void TrayNext_Click(object? s, EventArgs e) => Dispatcher.Invoke(PlayNext);
         private void TrayExit_Click(object? s, EventArgs e) => Dispatcher.Invoke(() =>
         {
             _trayIcon!.Visible = false;
@@ -347,15 +374,8 @@ namespace YTPlayer
             try
             {
                 var uri = new Uri(url);
-                // Парсим query string вручную без System.Web
-                var query = uri.Query.TrimStart('?');
-                foreach (var part in query.Split('&'))
-                {
-                    var kv = part.Split('=');
-                    if (kv.Length == 2 && kv[0] == "v")
-                        return Uri.UnescapeDataString(kv[1]);
-                }
-                return "";
+                var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+                return query["v"] ?? "";
             }
             catch { return ""; }
         }
@@ -462,12 +482,6 @@ namespace YTPlayer
             UpdateTrayControls(_mpv.IsRunning);
         }
 
-        private void UpdateActiveTrack()
-        {
-            for (int i = 0; i < _queue.Count; i++)
-                _queue[i].IsActive = i == _queueIndex;
-        }
-
         private void AddCurrentToQueue_Click(object sender, RoutedEventArgs e)
         {
             var url = UrlBox.Text.Trim();
@@ -502,6 +516,8 @@ namespace YTPlayer
         private async Task PlayQueueItemAsync(int idx)
         {
             if (idx < 0 || idx >= _queue.Count) return;
+            SetActiveQueueItem(idx);
+            QueueList.ScrollIntoView(_queue[idx]);
             UrlBox.Text = _queue[idx].Url;
             await StartPlayAsync();
         }
@@ -529,8 +545,8 @@ namespace YTPlayer
             if (string.IsNullOrEmpty(url))
             { System.Windows.MessageBox.Show("Вставь ссылку на YouTube видео или плейлист", "Нет ссылки"); return; }
 
-            // Если уже запускается — игнорируем
-            if (!_playSemaphore.Wait(0)) return;
+            // Ждём семафор до 5 сек (нужно при авто-переходе треков)
+            if (!await _playSemaphore.WaitAsync(5000)) return;
             _isStarting = true;
             PlayButton.IsEnabled = false;
 
@@ -566,7 +582,6 @@ namespace YTPlayer
                 Log("PlayAsync returned");
                 SetStatus("играет", "#44cc77");
                 UpdateTrayControls(true);
-                UpdateActiveTrack();
             }
             finally
             {
@@ -634,6 +649,7 @@ namespace YTPlayer
                             await Dispatcher.InvokeAsync(async () =>
                             {
                                 _queueIndex = firstItemIndex;
+                                SetActiveQueueItem(_queueIndex);
                                 UrlBox.Text = item.Url;
                                 await StartPlayAsync();
                             });
@@ -667,7 +683,9 @@ namespace YTPlayer
 
         private async void StopButton_Click(object sender, RoutedEventArgs e)
         {
+            _isStarting = false;
             _playlistCts?.Cancel();
+            SetActiveQueueItem(-1);
             TitleText.Text = "Ничего не играет";
             Title = "YT Player";
             ProgressSlider.Value = 0;
@@ -682,6 +700,9 @@ namespace YTPlayer
             UpdateTrayControls(false);
 
             await _mpv.StopAsync();
+            // Освобождаем семафор если StartPlayAsync завис (напр. mpv не запустился)
+            if (_playSemaphore.CurrentCount == 0)
+                _playSemaphore.Release();
             _ = Task.Run(() => { GC.Collect(); GC.WaitForPendingFinalizers(); });
         }
 
@@ -693,60 +714,41 @@ namespace YTPlayer
         }
 
         // ─── Прогресс-бар ──────────────────────────────────────────────────
-        private void ProgressSlider_MouseDown(object sender, MouseButtonEventArgs e)
+        // Thumb.DragStarted — пользователь схватил ползунок
+        private void ProgressSlider_DragStarted(object sender, DragStartedEventArgs e)
         {
-            if (!ProgressSlider.IsEnabled) return;
             _isDraggingSlider = true;
-            var track = ((Slider)sender).Template.FindName("PART_Track", (Slider)sender) as Track;
-            if (track == null) return;
-            var pos = track.ValueFromPoint(e.GetPosition(track));
-            ProgressSlider.Value = Math.Clamp(pos, 0, ProgressSlider.Maximum);
-            // НЕ перематываем здесь — только при отпускании
         }
 
-        private void ProgressSlider_MouseUp(object sender, MouseButtonEventArgs e)
+        // Thumb.DragCompleted — отпустил, делаем seek
+        private void ProgressSlider_DragCompleted(object sender, DragCompletedEventArgs e)
         {
-            if (_isDraggingSlider && _mpv.IsRunning) _ = _mpv.SeekAbsoluteAsync(ProgressSlider.Value);
             _isDraggingSlider = false;
+            if (_mpv.IsRunning)
+                _ = _mpv.SeekAbsoluteAsync(ProgressSlider.Value);
         }
 
-        private void ProgressSlider_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
-        {
-            if (!_isDraggingSlider || e.LeftButton != System.Windows.Input.MouseButtonState.Pressed) return;
-            var track = ((Slider)sender).Template.FindName("PART_Track", (Slider)sender) as Track;
-            if (track == null) return;
-            var pos = track.ValueFromPoint(e.GetPosition(track));
-            ProgressSlider.Value = Math.Clamp(pos, 0, ProgressSlider.Maximum);
-        }
-
+        // ValueChanged — обновляем метку времени пока тащим
         private void ProgressSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
-            if (_isDraggingSlider) TimePos.Text = FormatTime(e.NewValue);
+            if (_isDraggingSlider)
+                TimePos.Text = FormatTime(e.NewValue);
         }
 
-        private bool _isDraggingVolume;
-
-        private void VolumeSlider_MouseDown(object sender, MouseButtonEventArgs e)
+        // Клик по треку (не по Thumb) — seek сразу
+        // Thumb сам поглощает MouseDown через DragStarted, сюда он не доходит
+        private void ProgressSlider_PreviewMouseDown(object sender, MouseButtonEventArgs e)
         {
-            _isDraggingVolume = true;
-            var track = ((Slider)sender).Template.FindName("PART_Track", (Slider)sender) as Track;
+            if (!ProgressSlider.IsEnabled) return;
+            if (e.OriginalSource is Thumb) return;
+
+            var track = ProgressSlider.Template.FindName("PART_Track", ProgressSlider) as Track;
             if (track == null) return;
             var pos = track.ValueFromPoint(e.GetPosition(track));
-            VolumeSlider.Value = Math.Clamp(pos, VolumeSlider.Minimum, VolumeSlider.Maximum);
-        }
-
-        private void VolumeSlider_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
-        {
-            if (!_isDraggingVolume || e.LeftButton != System.Windows.Input.MouseButtonState.Pressed) return;
-            var track = ((Slider)sender).Template.FindName("PART_Track", (Slider)sender) as Track;
-            if (track == null) return;
-            var pos = track.ValueFromPoint(e.GetPosition(track));
-            VolumeSlider.Value = Math.Clamp(pos, VolumeSlider.Minimum, VolumeSlider.Maximum);
-        }
-
-        private void VolumeSlider_MouseUp(object sender, MouseButtonEventArgs e)
-        {
-            _isDraggingVolume = false;
+            pos = Math.Clamp(pos, 0, ProgressSlider.Maximum);
+            ProgressSlider.Value = pos;
+            if (_mpv.IsRunning)
+                _ = _mpv.SeekAbsoluteAsync(pos);
         }
 
         // ─── Громкость ─────────────────────────────────────────────────────
@@ -764,11 +766,23 @@ namespace YTPlayer
         }
 
         // ─── Утилиты ───────────────────────────────────────────────────────
+        // ─── Лог тоггл ────────────────────────────────────────────────────
+        private void LogToggle_Checked(object sender, RoutedEventArgs e)
+        {
+            LogBox.Visibility = Visibility.Visible;
+            LogToggle.Content = "▲  Отладка";
+        }
+        private void LogToggle_Unchecked(object sender, RoutedEventArgs e)
+        {
+            LogBox.Visibility = Visibility.Collapsed;
+            LogToggle.Content = "▼  Отладка";
+        }
+
         private void SetStatus(string text, string colorHex)
         {
             StatusText.Text = text;
             StatusDot.Fill = new SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(colorHex));
-         }
+        }
 
         private static string FormatTime(double seconds)
         {
@@ -786,11 +800,28 @@ namespace YTPlayer
         public override string ToString() => Duration.Length > 0 ? $"[{Duration}] {Title}" : Title;
     }
 
-    public class QueueItem
+    public class QueueItem : INotifyPropertyChanged
     {
+        private string _title = "";
+        private bool _isActive;
+
         public string Url { get; set; } = "";
-        public string Title { get; set; } = "";
-        public bool IsActive { get; set; } = false;
-        public override string ToString() => (IsActive ? "▶ " : "") + Title;
+
+        public string Title
+        {
+            get => _title;
+            set { _title = value; OnPropertyChanged(nameof(Title)); }
+        }
+
+        public bool IsActive
+        {
+            get => _isActive;
+            set { _isActive = value; OnPropertyChanged(nameof(IsActive)); }
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+        protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+
+        public override string ToString() => Title;
     }
 }
